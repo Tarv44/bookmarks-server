@@ -28,6 +28,23 @@ bookmarksRouter
                 .send('Invalid data.')
         }
 
+        const expression = /[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)?/gi
+        const urlRegex = new RegExp(expression)
+
+        if (!url.match(urlRegex)) {
+            logger.error('Invalid URL')
+            return res  
+                .status(400)
+                .send('Invalid data.')
+        }
+
+        if (Number(rating) < 1 || Number(rating) > 5) {
+            logger.error('Number out of range')
+            return res  
+                .status(400)
+                .send('Invalid data.')
+        }
+
         const id = uuid()
 
         const bookmark = {
