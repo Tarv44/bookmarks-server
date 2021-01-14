@@ -26,7 +26,7 @@ app.use(function validateBearerToken(req, res, next) {
     next()
 })
 
-app.use(bookmarksRouter)
+app.use('/api/bookmarks', bookmarksRouter)
 
 app.use(morgan(morganOption))
 app.use(helmet())
