@@ -1,9 +1,18 @@
 const express = require('express')
-const { v4: uuid } = require('uuid')
+const xss = require('xss')
 const bookmarksRouter = express.Router()
+const { isWebUri } = require('valid-url')
 const bodyParser = express.json()
 const logger = require('../logger')
 const BookmarksService = require('../bookmarks-service')
+
+const serializeBookmark = bookmark => ({
+    id: bookmark.id,
+    title: xss(bookmark.title),
+    bookmark_url: bookmark.bookmark_url,
+    description: xss(bookmark.description),
+    rating: Number(bookmark.rating)
+})
 
 bookmarksRouter
     .route('/bookmarks')
@@ -11,67 +20,57 @@ bookmarksRouter
         const db = req.app.get('db')
         BookmarksService.getAllBookmarks(db)
             .then(bookmarks => {
-                return res.json(bookmarks)
+                res.json(bookmarks.map(serializeBookmark))
             })
             .catch(next)
     })
-    .post(bodyParser, (req, res) => {
-        const {title, url, description, rating} = req.body
-
-        if (!title) {
-            logger.error('Title is required')
-            return res
-                .status(400)
-                .send('Invalid data.')
+    .post(bodyParser, (req, res, next) => {
+        for (const field of ['title', 'bookmark_url', 'rating']) {
+            if (!req.body[field]) {
+              logger.error(`${field} is required`)
+              return res.status(400).send({
+                error: { message: `Missing '${field}' in request body.` }
+              })
+            }
         }
 
-        if (!url) {
-            logger.error('URL is required')
-            return res
-                .status(400)
-                .send('Invalid data.')
+        const { title, bookmark_url, description, rating } = req.body
+
+        const ratingNum = Number(rating)
+
+        if (!Number.isInteger(ratingNum) || ratingNum < 0 || ratingNum > 5) {
+            logger.error(`Invalid rating '${rating}' supplied`)
+            return res.status(400).send({
+              error: { message: `'rating' must be a number between 0 and 5` }
+            })
         }
 
-        const expression = /[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)?/gi
-        const urlRegex = new RegExp(expression)
-
-        if (!url.match(urlRegex)) {
-            logger.error('Invalid URL')
-            return res  
-                .status(400)
-                .send('Invalid data.')
+        if (!isWebUri(bookmark_url)) {
+            logger.error(`Invalid url '${bookmark_url}' supplied`)
+            return res.status(400).send({
+              error: { message: `'url' must be a valid URL` }
+            })
         }
 
-        if (Number(rating) < 1 || Number(rating) > 5) {
-            logger.error('Number out of range')
-            return res  
-                .status(400)
-                .send('Invalid data.')
-        }
+        const newBookmark = { title, bookmark_url, description, rating }
 
-        const id = uuid()
-
-        const bookmark = {
-            id,
-            title,
-            url,
-            description,
-            rating
-        }
-
-        bookmarks.push(bookmark)
-
-        logger.info(`Bookmark with id ${id} created`);
-
-        res
-            .status(201)
-            .location(`http://localhost:8000/bookmark/${id}`)
-            .json(bookmark);
+        BookmarksService.insertBookmark(
+            req.app.get('db'),
+            newBookmark
+        )
+            .then(bookmark => {
+                logger.info(`Bookmark with id ${bookmark.id} created`);
+                res
+                    .status(201)
+                    .location(`/bookmarks/${bookmark.id}`)
+                    .json(serializeBookmark(bookmark))
+            })
+            .catch(next)
     })
 
 bookmarksRouter
     .route('/bookmarks/:id')
-    .get((req, res, next) => {
+    .all((req, res, next) => {
         const { id } = req.params
         const db = req.app.get('db')
         BookmarksService.getBookmarkById(db, id)
@@ -80,30 +79,27 @@ bookmarksRouter
                     logger.error(`Bookmark with ${id} not found.`)
                     return res 
                         .status(404)
-                        .send('Not found')
+                        .json({
+                            error: { message: `Bookmark doesn't exist`}
+                        })
                 }
-                res.json(bookmark)
+                res.bookmark = bookmark
+                next()
             })
             .catch(next)
     })
-    .delete((req, res) => {
-        const { id } = req.params
-        const bookmarkIndex = bookmarks.findIndex(b => b.id == id)
-
-        if (bookmarkIndex === -1) {
-            logger.error(`Bookmark with ${id} not found`)
-            return res
-                .status(404)
-                .send('Not found')
-        }
-
-        bookmarks.splice(bookmarkIndex, 1)
-
-        logger.info(`Bookmark with id ${id} deleted.`)
-
-        res
-            .status(204)
-            .end()
+    .get((req, res, next) => {
+        res.json(serializeBookmark(res.bookmark))
+    })
+    .delete((req, res, next) => {
+        BookmarksService.deleteBookmark(
+            req.app.get('db'),
+            req.params.id
+        )
+            .then(numRowsAffected => {
+                res.status(204).end()
+            })
+            .catch(next)
     })
 
 module.exports = bookmarksRouter
